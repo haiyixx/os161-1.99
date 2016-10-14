@@ -30,17 +30,87 @@ typedef struct Vehicles
 } Vehicle;
 
 bool right_turn(Vehicle *v);
-bool check_constraints(Vehicle *newVehicle, Vehicle *currVehicle);
-bool able_to_enter(Direction origin, Direction destination);
+bool check_constraints(Vehicle *new_vehicle, Vehicle *curr_vehicle);
+bool able_to_enter(Vehicle *new_vehicle);
+void sleep_to_channel(Direction origin);
+void wake_from_channel(Direction origin, Direction destination);
+void random_broad_direction(struct cv *dir1, struct cv *dir2, struct cv *dir3);
 
-static struct lock *arrayLock;
-static struct cv *meetCondition;
+static struct lock *array_lock;
 static struct array *vehicles;
+static struct cv *from_east, *from_west, *from_north, *from_south;
 
+void
+sleep_to_channel(Direction origin)
+{
+  if (origin == 0) {
+    cv_wait(from_north, array_lock);
+  } else if (origin == 1) {
+    cv_wait(from_east, array_lock);
+  } else if (origin == 2) {
+    cv_wait(from_south, array_lock);
+  } else {
+    cv_wait(from_west, array_lock);
+  }
+
+}
+
+void random_broad_direction(struct cv *dir1, struct cv *dir2, struct cv *dir3)
+{
+  int i = random() % 2;
+  if (i == 0) {
+    cv_broadcast(dir1, array_lock);
+    cv_broadcast(dir2, array_lock);
+    cv_broadcast(dir3, array_lock);
+  } else {
+    cv_broadcast(dir2, array_lock);
+    cv_broadcast(dir1, array_lock);
+    cv_broadcast(dir3, array_lock);
+  }
+}
+
+void
+wake_from_channel(Direction origin, Direction destination)
+{
+  if (origin == 0) {
+      if (destination == 1) {
+        random_broad_direction(from_south, from_west, from_east);
+      } else if (destination == 2) {
+        random_broad_direction(from_west, from_east, from_south);
+      } else {
+        random_broad_direction(from_east, from_south, from_west);
+      }
+  } else if (origin == 1) {
+      if (destination == 0) {
+        random_broad_direction(from_south, from_west, from_north);
+      } else if (destination == 2) {
+        random_broad_direction(from_west, from_north, from_south);
+      } else {
+        random_broad_direction(from_north, from_south, from_west);
+      }
+  } else if (origin == 2) {
+      if (destination == 0) {
+        random_broad_direction(from_east, from_west, from_north);
+      } else if (destination == 1) {
+        random_broad_direction(from_west, from_north, from_east);
+      } else {
+        random_broad_direction(from_east, from_north, from_west);
+      }
+  } else {
+      if (destination == 0) {
+        random_broad_direction(from_east, from_south, from_north);
+      } else if (destination == 1) {
+        random_broad_direction(from_south, from_north, from_east);
+      } else {
+        random_broad_direction(from_east, from_north, from_south);
+      }
+  }
+}
 
 
 bool
-right_turn(Vehicle *v) {
+right_turn(Vehicle *v)
+{
   KASSERT(v != NULL);
   if (((v->origin == west) && (v->destination == south)) ||
       ((v->origin == south) && (v->destination == east)) ||
@@ -53,33 +123,28 @@ right_turn(Vehicle *v) {
 }
 
 bool
-check_constraints(Vehicle *newVehicle, Vehicle *currVehicle)
+check_constraints(Vehicle *new_vehicle, Vehicle *curr_vehicle)
 {
-  if (newVehicle->origin == currVehicle->origin) return true;
+  if (new_vehicle->origin == curr_vehicle->origin) return true;
 
   /* no conflict if vehicles go in opposite directions */
-  if ((newVehicle->origin == currVehicle->destination) &&
-    (newVehicle->destination == currVehicle->origin)) return true;
+  if ((new_vehicle->origin == curr_vehicle->destination) &&
+    (new_vehicle->destination == curr_vehicle->origin)) return true;
 
   /* no conflict if one makes a right turn and
     the other has a different destination */
-  if ((right_turn(newVehicle) || right_turn(currVehicle)) &&
-    (newVehicle->destination != currVehicle->destination)) return true;
+  if ((right_turn(new_vehicle) || right_turn(curr_vehicle)) &&
+    (new_vehicle->destination != curr_vehicle->destination)) return true;
 
   return false;
 }
 
 bool
-able_to_enter(Direction origin, Direction destination)
+able_to_enter(Vehicle *new_vehicle)
 {
-
-  Vehicle *newVehicle = kmalloc(sizeof(struct Vehicles));
-  newVehicle->origin = origin;
-  newVehicle->destination = destination;
-
   int num = array_num(vehicles);
   for(int i=0; i<num; i++) {
-    if (!check_constraints(newVehicle, array_get(vehicles, i))){
+    if (!check_constraints(new_vehicle, array_get(vehicles, i))) {
       return false;
     }
   }
@@ -97,16 +162,18 @@ void
 intersection_sync_init(void)
 {
 
-  arrayLock = lock_create("arrayLock");
-  if (arrayLock == NULL) {
+  array_lock = lock_create("array_lock");
+  if (array_lock == NULL) {
     panic("could not create arrray lock");
   }
 
-  meetCondition = cv_create("meetCondition");
-  if (meetCondition == NULL) {
+  from_north = cv_create("from_north");
+  from_south = cv_create("from_south");
+  from_east = cv_create("from_east");
+  from_west = cv_create("from_west");
+  if (from_north == NULL || from_south == NULL || from_east == NULL || from_west == NULL) {
     panic("could not create condition variable");
   }
-
   vehicles = array_create();
   if (vehicles == NULL) {
     panic("could not create vehicles array");
@@ -126,8 +193,11 @@ intersection_sync_init(void)
 void
 intersection_sync_cleanup(void)
 {
-  cv_destroy(meetCondition);
-  lock_destroy(arrayLock);
+  cv_destroy(from_west);
+  cv_destroy(from_south);
+  cv_destroy(from_east);
+  cv_destroy(from_north);
+  lock_destroy(array_lock);
   array_destroy(vehicles);
 }
 
@@ -148,21 +218,23 @@ intersection_sync_cleanup(void)
 void
 intersection_before_entry(Direction origin, Direction destination)
 {
-  KASSERT(arrayLock != NULL);
-  KASSERT(meetCondition != NULL);
+  KASSERT(array_lock != NULL);
+  KASSERT(from_east && from_west && from_north && from_south);
 
-  lock_acquire(arrayLock);
+  lock_acquire(array_lock);
+
+  //create new vehicle
+  Vehicle *new_vehicle = kmalloc(sizeof(struct Vehicles));
+  new_vehicle->origin = origin;
+  new_vehicle->destination = destination;
   // if does not meet condition, sleep on wait chanel
-  while (!able_to_enter(origin, destination)){
-    cv_wait(meetCondition, arrayLock);
+  while (!able_to_enter(new_vehicle)) {
+    sleep_to_channel(origin);
   }
 
-  //create new vehicle, add to vehicle array
-  Vehicle *newVehicle = kmalloc(sizeof(struct Vehicles));
-  newVehicle->origin = origin;
-  newVehicle->destination = destination;
-  array_add(vehicles, newVehicle, NULL);
-  lock_release(arrayLock);
+  //add to vehicle array
+  array_add(vehicles, new_vehicle, NULL);
+  lock_release(array_lock);
 
 }
 
@@ -181,18 +253,18 @@ intersection_before_entry(Direction origin, Direction destination)
 void
 intersection_after_exit(Direction origin, Direction destination)
 {
-  KASSERT(arrayLock != NULL);
-  KASSERT(meetCondition != NULL);
+  KASSERT(array_lock != NULL);
+  KASSERT(from_east && from_west && from_north && from_south);
 
-  lock_acquire(arrayLock);
+  lock_acquire(array_lock);
   int num = array_num(vehicles);
 
   for(int i=0; i<num; i++) {
     Vehicle *temp = array_get(vehicles, i);
     if (origin == temp->origin && destination == temp->destination) {
      array_remove(vehicles, i);
-     cv_broadcast(meetCondition, arrayLock);
-     lock_release(arrayLock);
+     wake_from_channel(origin, destination);
+     lock_release(array_lock);
      return;
    }
   }
