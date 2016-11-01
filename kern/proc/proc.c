@@ -41,6 +41,8 @@
  * Unless you're implementing multithreaded user processes, the only
  * process that will have more than one thread is the kernel process.
  */
+#include "opt-A2.h"
+#define PROCINLINE
 
 #include <types.h>
 #include <proc.h>
@@ -49,7 +51,9 @@
 #include <vnode.h>
 #include <vfs.h>
 #include <synch.h>
-#include <kern/fcntl.h>  
+#include <kern/fcntl.h>
+
+
 
 /*
  * The process for the kernel; this holds all the kernel-only threads.
@@ -63,10 +67,10 @@ struct proc *kproc;
 /* count of the number of processes, excluding kproc */
 static volatile unsigned int proc_count;
 /* provides mutual exclusion for proc_count */
-/* it would be better to use a lock here, but we use a semaphore because locks are not implemented in the base kernel */ 
+/* it would be better to use a lock here, but we use a semaphore because locks are not implemented in the base kernel */
 static struct semaphore *proc_count_mutex;
 /* used to signal the kernel menu thread when there are no processes */
-struct semaphore *no_proc_sem;   
+struct semaphore *no_proc_sem;
 #endif  // UW
 
 
@@ -103,8 +107,22 @@ proc_create(const char *name)
 	proc->console = NULL;
 #endif // UW
 
+#if OPT_A2
+	//lock_acquire(pid_pool_lock);
+	//proc->pid       = assign_pid();
+	///lock_release(pid_pool_lock);
+	proc->can_exit  = false;
+	proc->exit_code = 0;
+	procarray_init(&proc->child_proc);
+
+	proc->child_proc_lock = lock_create(name);
+	proc->parent_proc     = NULL;
+	proc->wait_pid_lock   = lock_create(name);
+	proc->wait_pid_cv     = cv_create(name);
+#endif
 	return proc;
 }
+
 
 /*
  * Destroy a proc structure.
@@ -123,7 +141,97 @@ proc_destroy(struct proc *proc)
 
 	KASSERT(proc != NULL);
 	KASSERT(proc != kproc);
+	DEBUG(DB_SYSCALL,"Proc_destroy: process %d \n",proc->pid);
+	DEBUG(DB_SYSCALL,"Proc_destroy: process name  %s \n",proc->p_name);
+#if OPT_A2
+	//TODO: better structure, it's messy now
+	//spinlock_acquire(proc->p_lock);
+	struct proc *parent_proc = proc->parent_proc;
 
+	// if the process has no parent, we can delete it safely
+	if (parent_proc == NULL) {
+
+		DEBUG(DB_SYSCALL,"Proc_destroy: %d 's parent is null\n",proc->pid);
+		lock_acquire(proc->child_proc_lock);
+		int len = procarray_num(&proc->child_proc);
+		DEBUG(DB_SYSCALL,"proc %d has %d child len: \n",proc->pid, len);
+		for (int i=0; i<len; i++) {
+			struct proc *child = procarray_get(&proc->child_proc, i);
+			spinlock_acquire(&child->p_lock);
+			DEBUG(DB_SYSCALL,"Proc_destroy: proc %d has child %d \n",proc->pid,child->pid);
+			if (child->can_exit) {
+				//if child can exit, set the child parent to null and delete it
+				child->parent_proc = NULL;
+				spinlock_release(&child->p_lock);
+				proc_destroy(child);
+			} else {
+				//child is not exitable, just set parent pointer to null
+			DEBUG(DB_SYSCALL,"Proc_destroy: %d  set it's child %d \n",proc->pid, child->pid);
+				child->parent_proc = NULL;
+				spinlock_release(&child->p_lock);
+			}
+		}
+		//destroy child_proc array, lock and cv
+		//TODO: have error on remove, cannot figure out
+		/*
+		for (int i=0; i<len; i++) {
+			struct proc *child = procarray_get(&proc->child_proc, i);
+			DEBUG(DB_SYSCALL,"child %d will be deleted\n",child->pid);
+			procarray_remove(&proc->child_proc,i);
+		}
+		*/
+		lock_release(proc->child_proc_lock);
+		lock_destroy(proc->child_proc_lock);
+		lock_destroy(proc->wait_pid_lock);
+		cv_destroy(proc->wait_pid_cv);
+
+
+		/* VFS fields */
+		if (proc->p_cwd) {
+			VOP_DECREF(proc->p_cwd);
+			proc->p_cwd = NULL;
+		}
+
+		if (proc->p_addrspace) {
+			struct addrspace *as;
+
+			as_deactivate();
+			as = curproc_setas(NULL);
+			as_destroy(as);
+		}
+
+		if (proc->console) {
+	  		vfs_close(proc->console);
+		}
+
+		threadarray_cleanup(&proc->p_threads);
+		spinlock_cleanup(&proc->p_lock);
+
+		P(proc_count_mutex);
+		KASSERT(proc_count > 0);
+		proc_count--;
+		/* signal the kernel menu thread if the process count has reached zero */
+		if (proc_count == 0) {
+	    	V(no_proc_sem);
+		}
+		V(proc_count_mutex);
+
+
+		//DEBUG(DB_SYSCALL,"pid to add is : process %d \n",(int)proc->pid);
+		//add_pid_pool(&proc->pid);
+		//lock_acquire(pid_pool_lock);
+		//DEBUG(DB_SYSCALL,"the address is  %d \n", &(proc->pid));
+		//array_add(pid_pool, &proc->pid, NULL);
+		//lock_release(pid_pool_lock);
+		DEBUG(DB_SYSCALL,"process %d is deleted \n",proc->pid);
+		kfree(proc->p_name);
+		kfree(proc);
+	}
+
+	//delete child_proc array
+
+
+#else
 	/*
 	 * We don't take p_lock in here because we must have the only
 	 * reference to this structure. (Otherwise it would be
@@ -166,15 +274,14 @@ proc_destroy(struct proc *proc)
 	threadarray_cleanup(&proc->p_threads);
 	spinlock_cleanup(&proc->p_lock);
 
-	kfree(proc->p_name);
-	kfree(proc);
+
 
 #ifdef UW
 	/* decrement the process count */
         /* note: kproc is not included in the process count, but proc_destroy
 	   is never called on kproc (see KASSERT above), so we're OK to decrement
 	   the proc_count unconditionally here */
-	P(proc_count_mutex); 
+	P(proc_count_mutex);
 	KASSERT(proc_count > 0);
 	proc_count--;
 	/* signal the kernel menu thread if the process count has reached zero */
@@ -183,7 +290,9 @@ proc_destroy(struct proc *proc)
 	}
 	V(proc_count_mutex);
 #endif // UW
-	
+
+#endif //OPT_A2
+
 
 }
 
@@ -193,6 +302,19 @@ proc_destroy(struct proc *proc)
 void
 proc_bootstrap(void)
 {
+#if OPT_A2
+  //create pid_pool, not working now
+  DEBUG(DB_SYSCALL,"proc_bootstrap: starting\n");
+  process_id = PID_MIN;
+  pid_pool = array_create();
+  array_init(pid_pool);
+  //KASSERT(pid_pool != NULL);
+  pid_pool_lock = lock_create("pid_pool_lock");
+  if (pid_pool_lock == NULL) {
+  	panic("could not create pid pool lock");
+  }
+  DEBUG(DB_SYSCALL,"proc_bootstrap: pid_pool generated\n");
+#endif
   kproc = proc_create("[kernel]");
   if (kproc == NULL) {
     panic("proc_create for kproc failed\n");
@@ -207,7 +329,7 @@ proc_bootstrap(void)
   if (no_proc_sem == NULL) {
     panic("could not create no_proc_sem semaphore\n");
   }
-#endif // UW 
+#endif // UW
 }
 
 /*
@@ -227,6 +349,11 @@ proc_create_runprogram(const char *name)
 		return NULL;
 	}
 
+//have to assign pid here or thread is interrupted
+#if OPT_A2
+	proc->pid = assign_pid();
+#endif
+
 #ifdef UW
 	/* open the console - this should always succeed */
 	console_path = kstrdup("con:");
@@ -238,7 +365,7 @@ proc_create_runprogram(const char *name)
 	}
 	kfree(console_path);
 #endif // UW
-	  
+
 	/* VM fields */
 
 	proc->p_addrspace = NULL;
@@ -266,7 +393,7 @@ proc_create_runprogram(const char *name)
 	/* increment the count of processes */
         /* we are assuming that all procs, including those created by fork(),
            are created using a call to proc_create_runprogram  */
-	P(proc_count_mutex); 
+	P(proc_count_mutex);
 	proc_count++;
 	V(proc_count_mutex);
 #endif // UW
@@ -334,7 +461,7 @@ curproc_getas(void)
 {
 	struct addrspace *as;
 #ifdef UW
-        /* Until user processes are created, threads used in testing 
+        /* Until user processes are created, threads used in testing
          * (i.e., kernel threads) have no process or address space.
          */
 	if (curproc == NULL) {
@@ -364,3 +491,36 @@ curproc_setas(struct addrspace *newas)
 	spinlock_release(&proc->p_lock);
 	return oldas;
 }
+
+#if OPT_A2
+pid_t assign_pid()
+{
+	KASSERT(pid_pool_lock != NULL);
+	//TODO: strange error, fix later
+	/*
+	lock_acquire(pid_pool_lock);
+	if (array_num(pid_pool) != 0) {
+		DEBUG(DB_SYSCALL, "array num is %d \n", array_num(pid_pool));
+		pid_t *retval = array_get(pid_pool, 0);
+		DEBUG(DB_SYSCALL, "pid is %d \n", *retval);
+		array_remove(pid_pool, 0);
+		DEBUG(DB_SYSCALL, "array num is %d \n", array_num(pid_pool));
+		return *retval;
+	}
+	lock_release(pid_pool_lock);
+	*/
+	lock_acquire(pid_pool_lock);
+	pid_t retval = process_id;
+	process_id = process_id + 1;
+	DEBUG(DB_SYSCALL, "pid is %d\n", retval);
+	lock_release(pid_pool_lock);
+	return retval;
+}
+void add_pid_pool(pid_t *pid)
+{
+	DEBUG(DB_SYSCALL,"add_pid_pool:  pid is %d\n",(int)pid);
+	lock_acquire(pid_pool_lock);
+	array_add(pid_pool, pid, NULL);
+	lock_release(pid_pool_lock);
+}
+#endif

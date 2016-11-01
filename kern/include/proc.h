@@ -39,11 +39,27 @@
 #include <spinlock.h>
 #include <thread.h> /* required for struct threadarray */
 
+#include "opt-A2.h"
+#include <limits.h>
+#include <array.h>
+#include <synch.h>
+
 struct addrspace;
 struct vnode;
 #ifdef UW
 struct semaphore;
 #endif // UW
+
+
+#if OPT_A2
+//create proc array
+struct proc;
+#ifndef PROCINLINE
+#define PROCINLINE INLINE
+#endif
+DECLARRAY_BYTYPE(procarray, struct proc);
+DEFARRAY_BYTYPE(procarray, struct proc, PROCINLINE);
+#endif
 
 /*
  * Process structure.
@@ -59,6 +75,8 @@ struct proc {
 	/* VFS */
 	struct vnode *p_cwd;		/* current working directory */
 
+
+
 #ifdef UW
   /* a vnode to refer to the console device */
   /* this is a quick-and-dirty way to get console writes working */
@@ -69,7 +87,34 @@ struct proc {
 #endif
 
 	/* add more material here as needed */
+#if OPT_A2
+    pid_t pid;
+    struct procarray child_proc;
+    bool can_exit; //false means can not exit
+    int exit_code;
+
+    struct proc *parent_proc;
+    struct lock *child_proc_lock;
+    struct lock *wait_pid_lock;
+    struct cv   *wait_pid_cv;
+
+#endif
 };
+
+
+#if OPT_A2
+
+pid_t volatile process_id; //global value to track process_id
+struct array *pid_pool;
+struct lock  *pid_pool_lock;
+/*
+ *not reuseable now, have trouble with array add and remove
+ *TODO: fix later
+ */
+pid_t assign_pid(void);
+void add_pid_pool(pid_t *pid);
+//struct proc get_child_process(procarray child_proc, pid_t pid);
+#endif
 
 /* This is the process structure for the kernel and for kernel-only threads. */
 extern struct proc *kproc;

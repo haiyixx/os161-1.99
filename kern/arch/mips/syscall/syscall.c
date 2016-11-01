@@ -36,6 +36,7 @@
 #include <current.h>
 #include <syscall.h>
 
+#include "opt-A2.h"
 
 /*
  * System call dispatcher.
@@ -78,6 +79,7 @@
 void
 syscall(struct trapframe *tf)
 {
+
 	int callno;
 	int32_t retval;
 	int err;
@@ -93,7 +95,7 @@ syscall(struct trapframe *tf)
 	 * really return a value, just 0 for success and -1 on
 	 * error. Since retval is the value returned on success,
 	 * initialize it to 0 by default; thus it's not necessary to
-	 * deal with it except for calls that return other values, 
+	 * deal with it except for calls that return other values,
 	 * like write.
 	 */
 
@@ -132,7 +134,12 @@ syscall(struct trapframe *tf)
 #endif // UW
 
 	    /* Add stuff here */
- 
+#if OPT_A2
+	case SYS_fork:
+	  DEBUG(DB_SYSCALL, "sys_fork:\n");
+	  err = sys_fork(tf,(pid_t *)&retval);
+	  break;
+#endif
 	default:
 	  kprintf("Unknown syscall %d\n", callno);
 	  err = ENOSYS;
@@ -154,12 +161,12 @@ syscall(struct trapframe *tf)
 		tf->tf_v0 = retval;
 		tf->tf_a3 = 0;      /* signal no error */
 	}
-	
+
 	/*
 	 * Now, advance the program counter, to avoid restarting
 	 * the syscall over and over again.
 	 */
-	
+
 	tf->tf_epc += 4;
 
 	/* Make sure the syscall code didn't forget to lower spl */
@@ -179,5 +186,15 @@ syscall(struct trapframe *tf)
 void
 enter_forked_process(struct trapframe *tf)
 {
-	(void)tf;
+	#if OPT_A2
+		//modify the trapframe and back to user space
+		struct trapframe child_tf = *tf;
+		kfree(tf);
+		child_tf.tf_a3 = 0;
+		child_tf.tf_v0 = 0;
+		child_tf.tf_epc += 4;
+		mips_usermode(&child_tf);
+	#else
+		(void)tf;
+	#endif
 }
