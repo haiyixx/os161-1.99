@@ -112,7 +112,7 @@ struct lock  *pid_pool_lock;
  *TODO: fix later
  */
 pid_t assign_pid(void);
-void add_pid_pool(pid_t *pid);
+void add_pid_pool(pid_t pid);
 //struct proc get_child_process(procarray child_proc, pid_t pid);
 #endif
 

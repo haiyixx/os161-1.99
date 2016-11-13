@@ -218,7 +218,7 @@ proc_destroy(struct proc *proc)
 
 
 		//DEBUG(DB_SYSCALL,"pid to add is : process %d \n",(int)proc->pid);
-		//add_pid_pool(&proc->pid);
+		add_pid_pool(proc->pid);
 		//lock_acquire(pid_pool_lock);
 		//DEBUG(DB_SYSCALL,"the address is  %d \n", &(proc->pid));
 		//array_add(pid_pool, &proc->pid, NULL);
@@ -497,30 +497,40 @@ pid_t assign_pid()
 {
 	KASSERT(pid_pool_lock != NULL);
 	//TODO: strange error, fix later
-	/*
+
 	lock_acquire(pid_pool_lock);
 	if (array_num(pid_pool) != 0) {
-		DEBUG(DB_SYSCALL, "array num is %d \n", array_num(pid_pool));
-		pid_t *retval = array_get(pid_pool, 0);
-		DEBUG(DB_SYSCALL, "pid is %d \n", *retval);
+		DEBUG(DB_SYSCALL, "pid_pool length is %d \n", array_num(pid_pool));
+		pid_t *pid = array_get(pid_pool, 0);
+		pid_t retval = *pid;
 		array_remove(pid_pool, 0);
-		DEBUG(DB_SYSCALL, "array num is %d \n", array_num(pid_pool));
-		return *retval;
+		kfree(pid);
+		DEBUG(DB_SYSCALL, "pid is %d \n", retval);
+		DEBUG(DB_SYSCALL, "pid_pool length is %d \n", array_num(pid_pool));
+		lock_release(pid_pool_lock);
+		return retval;
 	}
-	lock_release(pid_pool_lock);
-	*/
-	lock_acquire(pid_pool_lock);
+
 	pid_t retval = process_id;
 	process_id = process_id + 1;
 	DEBUG(DB_SYSCALL, "pid is %d\n", retval);
 	lock_release(pid_pool_lock);
 	return retval;
 }
-void add_pid_pool(pid_t *pid)
+
+void add_pid_pool(pid_t pid)
 {
-	DEBUG(DB_SYSCALL,"add_pid_pool:  pid is %d\n",(int)pid);
+	DEBUG(DB_SYSCALL,"**********add_pid_pool:  pid is %d**********\n",(int)pid);
+	pid_t *p = kmalloc(sizeof(pid_t));
+	*p = pid;
 	lock_acquire(pid_pool_lock);
-	array_add(pid_pool, pid, NULL);
+	array_add(pid_pool, p, NULL);
 	lock_release(pid_pool_lock);
+	//TEST
+	int n = array_num(pid_pool);
+	for(int i=0; i < n; i++) {
+		pid_t *num = array_get(pid_pool, i);
+		DEBUG(DB_SYSCALL,"pid is %d\n",(int)*num);
+	}
 }
 #endif
