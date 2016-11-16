@@ -45,15 +45,23 @@
 #include <syscall.h>
 #include <test.h>
 
+#include "opt-A2.h"
+#include <copyinout.h>
 /*
  * Load program "progname" and start running it in usermode.
  * Does not return except on error.
  *
  * Calls vfs_open on progname and thus may destroy it.
  */
+#if OPT_A2
+int
+runprogram(char *progname, char **args)
+#else
 int
 runprogram(char *progname)
+#endif
 {
+	DEBUG(DB_SYSEXECV, "--------------runprogram--------------\n");
 	struct addrspace *as;
 	struct vnode *v;
 	vaddr_t entrypoint, stackptr;
@@ -97,10 +105,56 @@ runprogram(char *progname)
 		return result;
 	}
 
+#if OPT_A2
+	  //count number of args and copy into kernel
+  	int args_num = 0;
+  	while (args[args_num] != NULL) {
+    	args_num++;
+  	}
+  	DEBUG(DB_SYSEXECV, "args_num is %d\n", args_num);
+
+  	//copy args to stack, align pointer to 4
+
+    //ROUNDUP(stackptr, 8);
+  	char **args_ptr = kmalloc(args_num * sizeof(char*));
+  	//vaddr_t tmp_stackptr = stackptr;
+  	int arg_len, aligned_len;
+
+  	for (int i=args_num-1; i>=0; i--) {
+  		arg_len = strlen(args[i]) + 1;
+  		aligned_len = ROUNDUP(arg_len, 4);
+  		stackptr -= aligned_len;
+  		result = copyoutstr(args[i], (userptr_t)stackptr, arg_len, NULL);
+  		if (result) {
+  			return result;
+  		}
+  		DEBUG(DB_SYSEXECV, "args[%d] is %s\n", i, args[i]);
+  		args_ptr[i] = (char *) stackptr;
+  	}
+  	args_ptr[args_num] = NULL;
+
+  	//len = args_num * sizeof(char*);
+  	//result = copyout(args_ptr, (userptr_t)stackptr, len);
+  	for (int i=args_num; i>=0; i--) {
+  		aligned_len = ROUNDUP(sizeof(char *), 4);
+  		stackptr -= aligned_len;
+  		result = copyout(&args_ptr[i], (userptr_t)stackptr, sizeof(char*));
+  		if (result) {
+  			return result;
+  		}
+  		//args_ptr[i] = (char *) stackptr;
+  	}
+  	DEBUG(DB_SYSEXECV, "size of vaddr_t %d\n", sizeof(vaddr_t));
+  	DEBUG(DB_SYSEXECV, "size of char * %d\n", sizeof(char *));
+  	DEBUG(DB_SYSEXECV, "reached here\n");
+	/* Warp to user mode. */
+	enter_new_process(args_num /*argc*/, (userptr_t)stackptr /*userspace addr of argv*/,
+			  stackptr, entrypoint);
+#else
 	/* Warp to user mode. */
 	enter_new_process(0 /*argc*/, NULL /*userspace addr of argv*/,
 			  stackptr, entrypoint);
-	
+#endif
 	/* enter_new_process does not return. */
 	panic("enter_new_process returned\n");
 	return EINVAL;

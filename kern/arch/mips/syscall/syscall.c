@@ -139,6 +139,10 @@ syscall(struct trapframe *tf)
 	  DEBUG(DB_SYSCALL, "sys_fork:\n");
 	  err = sys_fork(tf,(pid_t *)&retval);
 	  break;
+	case SYS_execv:
+	  DEBUG(DB_SYSEXECV, "syscall called sys_execv\n");
+	  err = sys_execv((const_userptr_t)tf->tf_a0, (userptr_t)tf->tf_a1);
+	  break;
 #endif
 	default:
 	  kprintf("Unknown syscall %d\n", callno);

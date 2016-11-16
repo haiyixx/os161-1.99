@@ -46,6 +46,7 @@ void syscall(struct trapframe *tf);
 #if OPT_A2
 void pre_enter_forked_process(void *data1, unsigned long data2);
 int sys_fork(struct trapframe *tf, pid_t *retval);
+int sys_execv(const_userptr_t program, userptr_t args);
 #endif
 /* Helper for fork(). You write this. */
 void enter_forked_process(struct trapframe *tf);

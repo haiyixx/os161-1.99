@@ -89,6 +89,7 @@
 #define DB_NETFS       0x0400
 #define DB_KMALLOC     0x0800
 #define DB_SYNCPROB    0x1000
+#define DB_SYSEXECV    0x9999
 
 extern uint32_t dbflags;
 
@@ -128,7 +129,7 @@ void kfree(void *ptr);
 void kheap_printstats(void);
 
 /*
- * C string functions. 
+ * C string functions.
  *
  * kstrdup is like strdup, but calls kmalloc instead of malloc.
  * If out of memory, it returns NULL.

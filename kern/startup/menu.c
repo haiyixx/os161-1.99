@@ -46,6 +46,7 @@
 #include "opt-sfs.h"
 #include "opt-net.h"
 
+#include "opt-A2.h"
 /*
  * In-kernel menu and command dispatcher.
  */
@@ -92,17 +93,30 @@ cmd_progthread(void *ptr, unsigned long nargs)
 	int result;
 
 	KASSERT(nargs >= 1);
-
+#if OPT_A2
+	args[nargs] = NULL;
+#else
 	if (nargs > 2) {
 		kprintf("Warning: argument passing from menu not supported\n");
 	}
-
+#endif
 	/* Hope we fit. */
 	KASSERT(strlen(args[0]) < sizeof(progname));
 
 	strcpy(progname, args[0]);
-
+#if OPT_A2
+	/*
+	int args_num = 0;
+  	while (args[args_num] != NULL) {
+    	args_num++;
+  	}
+	DEBUG(DB_SYSEXECV, "menue args_num is %d\n", args_num);
+	*/
+	DEBUG(DB_SYSEXECV, "menue args_n is %d\n", (int)nargs);
+	result = runprogram(progname, args);
+#else
 	result = runprogram(progname);
+#endif
 	if (result) {
 		kprintf("Running program %s failed: %s\n", args[0],
 			strerror(result));

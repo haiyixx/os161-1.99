@@ -12,6 +12,8 @@
 
 #include "opt-A2.h"
 #include <mips/trapframe.h>
+#include <kern/fcntl.h>
+#include <vfs.h>
 
 #if OPT_A2
 void pre_enter_forked_process(void *data1, unsigned long data2)
@@ -68,6 +70,148 @@ int sys_fork(struct trapframe *tf, pid_t *retval)
   }
   DEBUG(DB_SYSCALL, "sys_fork: threadfork is called\n");
   return 0;
+}
+
+int sys_execv(const_userptr_t program, userptr_t args)
+{
+  //TODO: Remember to free memory, tons of memory leak
+  DEBUG(DB_SYSEXECV, "--------------sys_execv--------------\n");
+
+  //copy program path into kernel
+  char *program_path;
+  size_t len;
+  program_path = kmalloc(sizeof(char) * PATH_MAX);
+  if (program_path == NULL) {
+    return ENOMEM;
+  }
+  int result = copyinstr(program, program_path, PATH_MAX, &len);
+  if (result) {
+    kfree(program_path);
+    return result;
+  }
+
+  //count number of args and copy into kernel
+  int args_num = 0;
+
+  char **args_ptr  = (char **) args;
+  while (args_ptr[args_num] != NULL) {
+     DEBUG(DB_SYSEXECV, "args_ptr[%d] is %s\n", args_num, args_ptr[args_num]);
+    args_num++;
+  }
+  DEBUG(DB_SYSEXECV, "exit the loop\n");
+
+  //args_num++;
+  /*
+  userptr_t args_copy = kmalloc(sizeof(userptr_t));
+  if (args_copy == NULL) {
+    kfree(program_path);
+    return ENOMEM;
+  }
+  */
+  char **args_copy = kmalloc(args_num * sizeof(char *));
+  /*
+  result = copyin(args, args_copy, sizeof(char **));
+  if (result) {
+    kfree(program_path);
+    kfree(args_copy);
+    return result;
+  }
+  */
+
+  for (int i=0; i<args_num; i++) {
+    args_copy[i] = kmalloc(sizeof(char) * PATH_MAX);
+    result = copyinstr((const_userptr_t)args_ptr[i], args_copy[i], PATH_MAX, &len);
+    DEBUG(DB_SYSEXECV, "args_copy[%d] is %s\n", i, args_copy[i]);
+    if (result) {
+      kfree(program_path);
+      kfree(args);
+      return result;
+    }
+  }
+   DEBUG(DB_SYSEXECV, "after copyin\n");
+  args_copy[args_num] = NULL;
+
+  struct addrspace *as;
+  struct vnode *v;
+  vaddr_t entrypoint, stackptr;
+
+  /* Open the file. */
+  result = vfs_open(program_path, O_RDONLY, 0, &v);
+  if (result) {
+    return result;
+  }
+
+  /* We should be a new process. */
+  //KASSERT(curproc_getas() == NULL);
+
+  /* Create a new address space. */
+  as = as_create();
+  if (as ==NULL) {
+    vfs_close(v);
+    return ENOMEM;
+  }
+
+  /* Switch to it and activate it. */
+  struct addrspace *old_addr = curproc_getas();
+  curproc_setas(as);
+  as_activate();
+
+  /* Load the executable. */
+  result = load_elf(v, &entrypoint);
+  if (result) {
+    /* p_addrspace will go away when curproc is destroyed */
+    vfs_close(v);
+    return result;
+  }
+
+  /* Done with the file now. */
+  vfs_close(v);
+
+  /* Define the user stack in the address space */
+  result = as_define_stack(as, &stackptr);
+  if (result) {
+    /* p_addrspace will go away when curproc is destroyed */
+    return result;
+  }
+
+  //copy args back to user stack
+  DEBUG(DB_SYSEXECV, "get here\n");
+  char **args_stkptr = kmalloc(args_num * sizeof(char*));
+  //vaddr_t tmp_stackptr = stackptr;
+  int arg_len, aligned_len;
+
+  for (int i=args_num-1; i>=0; i--) {
+    arg_len = strlen(args_copy[i]) + 1;
+    aligned_len = ROUNDUP(arg_len, 4);
+    stackptr -= aligned_len;
+    result = copyoutstr(args_copy[i], (userptr_t)stackptr, arg_len, NULL);
+    if (result) {
+      return result;
+    }
+    DEBUG(DB_SYSEXECV, "args[%d] is %s\n", i, args_copy[i]);
+    args_stkptr[i] = (char *) stackptr;
+  }
+  args_stkptr[args_num] = NULL;
+  //len = args_num * sizeof(char*);
+  //result = copyout(args_ptr, (userptr_t)stackptr, len);
+  for (int i=args_num; i>=0; i--) {
+    aligned_len = ROUNDUP(sizeof(char *), 4);
+    stackptr -= aligned_len;
+    result = copyout(&args_stkptr[i], (userptr_t)stackptr, sizeof(char*));
+    if (result) {
+      return result;
+    }
+      //args_ptr[i] = (char *) stackptr;
+  }
+  //destory old addr_space
+  as_destroy(old_addr);
+  /* Warp to user mode. */
+  enter_new_process(args_num /*argc*/, (userptr_t) stackptr /*userspace addr of argv*/,
+        stackptr, entrypoint);
+
+    /* enter_new_process does not return. */
+  panic("enter_new_process returned\n");
+  return EINVAL;
 }
 #endif
 
