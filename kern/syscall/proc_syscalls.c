@@ -30,6 +30,7 @@ int sys_fork(struct trapframe *tf, pid_t *retval)
   //create process structure for childprocess
   struct proc *child_process = proc_create_runprogram(curproc->p_name);
   if (child_process == NULL) {
+    DEBUG(DB_SYSCALL, "sys_fork: child process has no memory!\n");
     return ENOMEM;
   }
   DEBUG(DB_SYSCALL, "sys_fork: child process created\n");

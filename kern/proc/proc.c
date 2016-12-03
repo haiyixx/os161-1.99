@@ -141,6 +141,7 @@ proc_destroy(struct proc *proc)
 
 	KASSERT(proc != NULL);
 	KASSERT(proc != kproc);
+	DEBUG(DB_SYSCALL,"---------------------proc_destroy---------------\n");
 	DEBUG(DB_SYSCALL,"Proc_destroy: process %d \n",proc->pid);
 	DEBUG(DB_SYSCALL,"Proc_destroy: process name  %s \n",proc->p_name);
 #if OPT_A2
@@ -227,7 +228,7 @@ proc_destroy(struct proc *proc)
 		kfree(proc->p_name);
 		kfree(proc);
 	}
-
+		DEBUG(DB_SYSCALL,"---------------------proc_destroy return---------------\n");
 	//delete child_proc array
 
 

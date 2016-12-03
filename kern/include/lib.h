@@ -89,7 +89,8 @@
 #define DB_NETFS       0x0400
 #define DB_KMALLOC     0x0800
 #define DB_SYNCPROB    0x1000
-#define DB_SYSEXECV    0x9999
+#define DB_MEMORY      0x1200
+#define DB_SYSEXECV    0x1400
 
 extern uint32_t dbflags;
 
